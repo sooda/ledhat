@@ -1,0 +1,4 @@
+*.sw[pon]
+*.out
+*.lst
+*.hex
