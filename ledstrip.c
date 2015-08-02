@@ -1,19 +1,21 @@
 // attiny85: 8K flash, 512B eeprom, 512B sram
 // fuses: lfuse E2, hfuse DF, ext FF
-// avrdude -cusbasp -pt85 -U flash:w:program.hex
+
+#include <stdint.h>
+#include <string.h>
 
 #include <avr/io.h>
-#include <stdint.h>
 #include <util/delay.h>
 
-#define LEDS 20
+#define LED_COUNT 20
 
 #define SPIPORT PORTB
 #define SPIDDR DDRB
 #define SPICLK _BV(2)
 #define SPIDATA _BV(1)
 
-static uint8_t r[LEDS], g[LEDS], b[LEDS];
+static uint8_t r[LED_COUNT], g[LED_COUNT], b[LED_COUNT];
+static uint8_t brightness;
 
 /*
  * Output one byte. Set data, set clock, unset clock.
@@ -38,15 +40,15 @@ static void spi_setup() {
 }
 
 static void output_all() {
-	for (uint8_t i = 0; i < LEDS; i++) {
+	for (uint8_t i = 0; i < LED_COUNT; i++) {
 		spi_out(b[i]);
 		spi_out(g[i]);
 		spi_out(r[i]);
 	}
+	_delay_ms(1);
 }
 
-// from kalvosinledi
-void rainbow() {
+static void rainbow() {
 	static uint8_t sstep=0, smode = 0, srr, sgg, sbb;
 #define spets (255 - sstep)
 	switch (smode) {
@@ -67,7 +69,7 @@ void rainbow() {
 	
 	
 #define pets (255 - step)
-	for (uint8_t x = 0; x < LEDS; x++) {
+	for (uint8_t x = 0; x < LED_COUNT; x++) {
 		switch (mode) {
 			case 0: rr = step; break; // 0 -> r
 			case 1: gg = step; break; // r -> rg
@@ -86,23 +88,23 @@ void rainbow() {
 	_delay_ms(25);
 }
 
-void rollpoints() {
+static void rollpoints() {
 	static uint8_t cmode, cc, pos;
-#define omg(x,v,k) x[(v)%LEDS] = k
+#define omg(x,v,k) x[(v)%LED_COUNT] = k
 #define zing2(x, q) omg(x, q, c>>4); omg(x, q+1, c>>2); omg(x, q+2, c); omg(x, q+3, c>>2); omg(x, q+4, c>>4)
 #define zing(x, q) omg(x, q+1, c>>2); omg(x, q+2, c); omg(x, q+3, c>>4)
-#define hax(x) zing(x, pos); zing(x, pos + LEDS / 2)
+#define hax(x) zing(x, pos); zing(x, pos + LED_COUNT / 2)
 	
 		cc += 4;
 		uint8_t c = cc <= 127 ? cc : 255 - cc;
 		if (cc == 0) cmode++;
 		
 		pos+=1;
-		pos %= LEDS;
+		pos %= LED_COUNT;
 
 		uint8_t x;
 		const int fadespd = 3;
-		for (x = 0; x < LEDS; x++) {
+		for (x = 0; x < LED_COUNT; x++) {
 			//r[x]=g[x]=b[x]=0;
 			r[x] = r[x] <= fadespd ? 0 : r[x] - fadespd;
 			g[x] = g[x] <= fadespd ? 0 : g[x] - fadespd;
@@ -131,17 +133,82 @@ void rollpoints() {
 		_delay_ms(50);
 }
 
+static void whites(uint8_t w) {
+	memset(r, w, LED_COUNT);
+	memset(g, w, LED_COUNT);
+	memset(b, w, LED_COUNT);
+}
+
+static void dim(uint8_t shift) {
+	while (shift--) {
+		for (int i = 0; i < LED_COUNT; i++) {
+			// avr can do just one at a time
+			r[i] >>= 1;
+			g[i] >>= 1;
+			b[i] >>= 1;
+		}
+	}
+}
+
+static inline void button_setup() {
+	DDRB |= _BV(3);
+	DDRB |= _BV(4);
+	// pull ups because buttons
+	PORTB |= _BV(3);
+	PORTB |= _BV(4);
+}
+
+static inline uint8_t buttons() {
+	return (~PINB) & (_BV(3)|_BV(4));
+}
+
 int main() {
 	spi_setup();
+	button_setup();
 	int time = 0;
+	uint8_t prevbtn = buttons();
+	uint8_t mode = 0;
 	for (;;) {
 		output_all();
-		time++;
-		if (time < 200)
-			rollpoints();
-		else if (time < 200+400)
-			rainbow();
-		else
-			time = 0;
+
+		switch (mode) {
+		case 0:
+		case 1:
+			time++;
+			if (time < 200)
+				rollpoints();
+			else if (time < 200+400)
+				rainbow();
+			else
+				time = 0;
+			if (mode == 1) {
+				dim(3);
+			}
+			break;
+		case 2:
+			whites(255);
+			break;
+		case 3:
+			whites(50);
+			break;
+		case 4:
+			whites(1);
+			break;
+		case 5:
+			whites(0);
+			break;
+		}
+
+		uint8_t curbtn = buttons();
+		uint8_t diffbtn = curbtn ^ prevbtn;
+		if (diffbtn && curbtn) {
+			// "debounce"
+			_delay_ms(50);
+			curbtn = buttons();
+			if (curbtn) {
+				mode = mode == 5 ? 0 : mode + 1;
+			}
+		}
+		prevbtn = curbtn;
 	}
 }
